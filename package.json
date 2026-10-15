@@ -1,0 +1,41 @@
+{
+  "name": "amikoo-wdio-companion",
+  "displayName": "Amikoo WDIO Companion",
+  "description": "Visual companion for integrating WebdriverIO test executions with Amikoo.",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "local-poc",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Testing"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "amikooWdio.openCompanion",
+        "title": "Amikoo WDIO: Open Companion"
+      },
+      {
+        "command": "amikooWdio.connect",
+        "title": "Amikoo WDIO: Connect API Key"
+      },
+      {
+        "command": "amikooWdio.disconnect",
+        "title": "Amikoo WDIO: Disconnect"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.0.0"
+  }
+}
