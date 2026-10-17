@@ -39,8 +39,23 @@ const vscode = __importStar(require("vscode"));
 const fs = __importStar(require("node:fs"));
 const path = __importStar(require("node:path"));
 const node_crypto_1 = require("node:crypto");
+const client_s3_1 = require("@aws-sdk/client-s3");
+const s3_request_presigner_1 = require("@aws-sdk/s3-request-presigner");
+const credential_providers_1 = require("@aws-sdk/credential-providers");
 const SECRET_KEY = 'amikooWdio.apiKey';
 const API_URL = 'https://app.amikoo.ai';
+async function getVideoUrl(bucket, region, key) {
+    const client = new client_s3_1.S3Client({
+        region,
+        credentials: (0, credential_providers_1.fromIni)({
+            profile: 'amikoo-wdio'
+        })
+    });
+    return (0, s3_request_presigner_1.getSignedUrl)(client, new client_s3_1.GetObjectCommand({
+        Bucket: bucket,
+        Key: key
+    }), { expiresIn: 900 });
+}
 function detectProject() {
     const workspace = vscode.workspace.workspaceFolders?.[0];
     if (!workspace) {
@@ -83,20 +98,27 @@ function loadReport() {
     if (!workspace) {
         return null;
     }
-    const reportPath = path.join(workspace.uri.fsPath, 'reports', 'amikoo-results.json');
-    if (!fs.existsSync(reportPath)) {
-        return null;
-    }
-    try {
-        const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
-        if (!Array.isArray(report.tests)) {
-            return null;
+    const reportsDirectory = path.join(workspace.uri.fsPath, 'reports');
+    const candidates = [
+        'amikoo-consolidated.json',
+        'amikoo-results.json'
+    ];
+    for (const filename of candidates) {
+        const reportPath = path.join(reportsDirectory, filename);
+        if (!fs.existsSync(reportPath)) {
+            continue;
         }
-        return report;
+        try {
+            const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+            if (Array.isArray(report.tests)) {
+                return report;
+            }
+        }
+        catch (error) {
+            console.warn(`[Amikoo] Unable to load ${filename}:`, error);
+        }
     }
-    catch {
-        return null;
-    }
+    return null;
 }
 async function validateApiKey(apiKey) {
     const response = await fetch(`${API_URL}/validate_key`, {
@@ -139,212 +161,361 @@ function buildHtmlReport(report) {
         const colorClass = test.result ? 'pass' : 'fail';
         const error = !test.result && test.error?.message
             ? `
+
                 <div class="error">
+
                     <strong>Error:</strong>
+
                     ${escapeHtml(test.error.message)}
+
                     ${test.error.stack
                 ? `<details>
+
                             <summary>Stack trace</summary>
+
                             <pre>${escapeHtml(test.error.stack)}</pre>
+
                            </details>`
                 : ''}
+
                 </div>
+
             `
             : '';
         return `
+
             <article class="test">
+
                 <div class="test-top">
+
                     <strong>${escapeHtml(test.name)}</strong>
+
                     <span class="${colorClass}">${status}</span>
+
                 </div>
+
                 <div class="muted">
+
                     ${escapeHtml(test.filePath)}
+
                     · ${Number(test.duration || 0).toFixed(2)} s
+
                 </div>
+
                 ${error}
+
             </article>
+
         `;
     }).join('');
     return `<!DOCTYPE html>
+
 <html lang="en">
+
 <head>
+
     <meta charset="UTF-8">
+
     <meta name="viewport"
+
           content="width=device-width, initial-scale=1">
+
     <title>Amikoo WDIO Test Report</title>
+
     <style>
+
         * { box-sizing: border-box; }
 
         body {
+
             margin: 0;
+
             background: #101217;
+
             color: #e8eaf0;
+
             font-family: Arial, sans-serif;
+
             line-height: 1.5;
+
         }
 
         main {
+
             max-width: 1100px;
+
             margin: auto;
+
             padding: 36px 24px;
+
         }
 
         h1 { margin-bottom: 4px; }
+
         h2 { margin-top: 36px; }
 
         .muted {
+
             color: #9ca3af;
+
             font-size: 13px;
+
         }
 
         .grid {
+
             display: grid;
+
             grid-template-columns: repeat(4, 1fr);
+
             gap: 14px;
+
             margin-top: 28px;
+
         }
 
         .card, .test {
+
             background: #1b1e25;
+
             border: 1px solid #30343d;
+
             border-radius: 10px;
+
             padding: 20px;
+
         }
 
         .card .number {
+
             font-size: 32px;
+
             font-weight: bold;
+
             margin-top: 10px;
+
         }
 
         .pass { color: #55c990; }
+
         .fail { color: #ff7777; }
 
         .progress {
+
             display: flex;
+
             height: 12px;
+
             background: #30343d;
+
             border-radius: 8px;
+
             overflow: hidden;
+
             margin: 24px 0 12px;
+
         }
 
         .progress-pass {
+
             width: ${passRate}%;
+
             background: #55c990;
+
         }
 
         .progress-fail {
+
             width: ${total ? (failed / total) * 100 : 0}%;
+
             background: #ff7777;
+
         }
 
         .test { margin-bottom: 12px; }
 
         .test-top {
+
             display: flex;
+
             justify-content: space-between;
+
             gap: 16px;
+
             margin-bottom: 8px;
+
         }
 
         .error {
+
             margin-top: 14px;
+
             background: #2b2228;
+
             border-left: 3px solid #ff7777;
+
             padding: 14px;
+
             font-size: 13px;
+
             overflow-wrap: anywhere;
+
         }
 
         pre {
+
             white-space: pre-wrap;
+
             overflow-wrap: anywhere;
+
             font-size: 12px;
+
         }
 
         details { margin-top: 12px; }
+
         summary { cursor: pointer; }
 
         footer {
+
             margin-top: 36px;
+
             border-top: 1px solid #30343d;
+
             padding-top: 18px;
+
             color: #9ca3af;
+
             font-size: 12px;
+
         }
 
         @media (max-width: 700px) {
+
             .grid {
+
                 grid-template-columns: repeat(2, 1fr);
+
             }
+
         }
 
         @media print {
+
             body {
+
                 background: white;
+
                 color: black;
+
             }
 
             .card, .test {
+
                 background: white;
+
                 border-color: #ccc;
+
                 break-inside: avoid;
+
             }
+
         }
+
     </style>
+
 </head>
+
 <body>
+
 <main>
+
     <h1>Amikoo WDIO Test Report</h1>
+
     <div class="muted">
+
         ${escapeHtml(report.framework)}
+
         · ${escapeHtml(report.automation)}
+
         · ${escapeHtml(report.platform)}
+
     </div>
 
     <p class="muted">Generated: ${escapeHtml(generatedAt)}</p>
+
     <p class="muted">
+
         Amikoo execution ID: Not available in local report
+
     </p>
 
     <div class="grid">
+
         <div class="card">
+
             <div class="muted">TOTAL TESTS</div>
+
             <div class="number">${total}</div>
+
         </div>
+
         <div class="card">
+
             <div class="muted">PASSED</div>
+
             <div class="number pass">${passed}</div>
+
         </div>
+
         <div class="card">
+
             <div class="muted">FAILED</div>
+
             <div class="number fail">${failed}</div>
+
         </div>
+
         <div class="card">
+
             <div class="muted">PASS RATE</div>
+
             <div class="number">${passRate}%</div>
+
         </div>
+
     </div>
 
     <div class="progress">
+
         <div class="progress-pass"></div>
+
         <div class="progress-fail"></div>
+
     </div>
 
     <div class="muted">
+
         Sum of test durations:
+
         ${totalDuration.toFixed(2)} seconds
+
     </div>
 
     <h2>Test Results</h2>
+
     ${rows || '<p>No test results available.</p>'}
 
     <footer>
+
         Generated by Amikoo WDIO Companion
+
     </footer>
+
 </main>
+
 </body>
+
 </html>`;
 }
 function activate(context) {
@@ -382,422 +553,999 @@ function activate(context) {
         const testRows = tests.map(test => {
             const status = test.result ? 'PASS' : 'FAIL';
             const statusClass = test.result ? 'passed' : 'failed';
+            const videoUri = test.evidence?.video?.s3Uri;
+            const videoHtml = videoUri
+                ? `
+
+                    <div class="video-evidence">
+
+                        <div class="video-heading">
+
+                            <span class="passed">● Recording available</span>
+
+                            <span class="test-meta">MP4 · Private S3</span>
+
+                        </div>
+
+                        <button
+
+                            class="watch-video"
+
+                            data-video="${escapeHtml(videoUri)}"
+
+                            data-test-id="${escapeHtml(test.testRunId || '')}"
+
+                        >
+
+                            ▶ Watch Recording
+
+                        </button>
+
+                        <div
+
+                            class="video-container"
+
+                            id="video-${escapeHtml(test.testRunId || '')}"
+
+                            hidden
+
+                        >
+
+                            <div class="video-loading">
+
+                                Loading recording...
+
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                `
+                : `
+
+                    <div class="test-meta">
+
+                        Recording unavailable
+
+                    </div>
+
+                `;
             const errorHtml = !test.result && test.error?.message
                 ? `
+
                     <div class="error-box">
+
                         <strong>Error:</strong>
+
                         ${escapeHtml(test.error.message)}
+
                     </div>
+
                 `
                 : '';
             return `
+
                 <div class="test-row">
+
                     <div class="test-header">
+
                         <span class="test-name">
+
                             ${escapeHtml(test.name)}
+
                         </span>
+
                         <span class="status ${statusClass}">
+
                             ${status}
+
                         </span>
+
                     </div>
 
                     <div class="test-meta">
+
                         ${escapeHtml(test.filePath)}
+
                         · ${formatDuration(Number(test.duration))}
+
                     </div>
 
                     ${errorHtml}
+
+                    ${videoHtml}
+
                 </div>
+
             `;
         }).join('');
         currentPanel.webview.html = `
+
 <!DOCTYPE html>
+
 <html lang="en">
+
 <head>
+
     <meta charset="UTF-8">
 
     <meta
+
         name="viewport"
+
         content="width=device-width, initial-scale=1.0"
+
     >
 
     <meta
+
         http-equiv="Content-Security-Policy"
+
         content="
+
             default-src 'none';
+
             style-src 'nonce-${nonce}';
+
             script-src 'nonce-${nonce}';
+
+            media-src https://*.amazonaws.com;
+
         "
+
     >
 
     <title>Amikoo WDIO Companion</title>
 
     <style nonce="${nonce}">
+
         * {
+
             box-sizing: border-box;
+
+        }
+
+        .video-evidence {
+
+            margin-top: 14px;
+
+            padding: 12px;
+
+            border: 1px solid var(--vscode-panel-border);
+
+            border-radius: 6px;
+
+        }
+
+        .video-evidence button {
+
+            margin-top: 10px;
+
         }
 
         body {
+
             font-family: var(--vscode-font-family);
+
             color: var(--vscode-foreground);
+
             padding: 28px;
+
             margin: 0;
+
         }
 
         h1 {
+
             margin: 0 0 6px;
+
             font-size: 26px;
+
         }
 
         .subtitle {
+
             opacity: 0.7;
+
             margin-bottom: 28px;
+
         }
 
         .section-title {
+
             font-size: 16px;
+
             font-weight: 600;
+
             margin: 28px 0 16px;
+
         }
 
         .grid {
+
             display: grid;
+
             grid-template-columns:
+
                 repeat(auto-fit, minmax(180px, 1fr));
+
             gap: 14px;
+
         }
 
         .card {
+
             background: var(--vscode-editorWidget-background);
+
             border: 1px solid var(--vscode-panel-border);
+
             border-radius: 8px;
+
             padding: 18px;
+
         }
 
         .label {
+
             opacity: 0.7;
+
             font-size: 12px;
+
             font-weight: 600;
+
             letter-spacing: 0.5px;
+
         }
 
         .value {
+
             font-size: 14px;
+
             font-weight: 600;
+
             margin-top: 12px;
+
             overflow-wrap: anywhere;
+
         }
 
         .metric-value {
+
             font-size: 32px;
+
             font-weight: 700;
+
             margin-top: 10px;
+
         }
 
         .connected, .passed {
+
             color: var(--vscode-testing-iconPassed);
+
         }
 
         .disconnected, .failed {
+
             color: var(--vscode-testing-iconFailed);
+
         }
 
         .actions {
+
             display: flex;
+
             gap: 10px;
+
             flex-wrap: wrap;
+
             margin-top: 26px;
+
         }
 
         button {
+
             padding: 10px 16px;
+
             border: none;
+
             border-radius: 5px;
+
             cursor: pointer;
+
             font-family: inherit;
+
             font-weight: 600;
+
             background: var(--vscode-button-background);
+
             color: var(--vscode-button-foreground);
+
         }
 
         button.secondary {
+
             background: var(--vscode-button-secondaryBackground);
+
             color: var(--vscode-button-secondaryForeground);
+
         }
 
         button:disabled {
+
             opacity: 0.5;
+
             cursor: not-allowed;
+
         }
 
         .run-status {
+
             margin-top: 18px;
+
             opacity: 0.85;
+
         }
 
         .execution-header {
+
             display: flex;
+
             justify-content: space-between;
+
             gap: 12px;
+
             align-items: center;
+
             flex-wrap: wrap;
+
             margin-bottom: 16px;
+
         }
 
         .execution-id {
+
             font-size: 21px;
+
             font-weight: 700;
+
         }
 
         .execution-note {
+
             font-size: 12px;
+
             opacity: 0.65;
+
             margin-top: 5px;
+
         }
 
         .progress {
+
             display: flex;
+
             width: 100%;
+
             height: 12px;
+
             border-radius: 8px;
+
             overflow: hidden;
+
             background: var(--vscode-progressBar-background);
+
             margin-top: 20px;
+
         }
 
         .progress-pass {
+
             background: var(--vscode-testing-iconPassed);
+
         }
 
         .progress-fail {
+
             background: var(--vscode-testing-iconFailed);
+
         }
 
         .test-row {
+
             padding: 16px;
+
             border: 1px solid var(--vscode-panel-border);
+
             border-radius: 8px;
+
             margin-bottom: 10px;
+
         }
 
         .test-header {
+
             display: flex;
+
             justify-content: space-between;
+
             align-items: center;
+
             gap: 14px;
+
         }
 
         .test-name {
+
             font-weight: 600;
+
         }
 
         .test-meta {
+
             opacity: 0.7;
+
             font-size: 12px;
+
             margin-top: 8px;
+
         }
 
         .status {
+
             font-weight: 700;
+
             font-size: 12px;
+
             white-space: nowrap;
+
         }
 
         .error-box {
+
             margin-top: 12px;
+
             padding: 12px;
+
             border-left: 3px solid var(--vscode-testing-iconFailed);
+
             background: var(--vscode-textBlockQuote-background);
+
             font-size: 12px;
+
             line-height: 1.6;
+
             overflow-wrap: anywhere;
+
         }
 
         .empty {
+
             padding: 24px;
+
             border: 1px dashed var(--vscode-panel-border);
+
             border-radius: 8px;
+
             opacity: 0.7;
+
         }
 
         .footer {
+
             margin-top: 30px;
+
             padding-top: 16px;
+
             border-top: 1px solid var(--vscode-panel-border);
+
             opacity: 0.65;
+
             font-size: 12px;
+
         }
+
+        .video-evidence {
+
+            margin-top: 14px;
+
+            padding: 14px;
+
+            border: 1px solid var(--vscode-panel-border);
+
+            border-radius: 8px;
+
+            background: var(--vscode-editorWidget-background);
+
+        }
+
+        .video-heading {
+
+            display: flex;
+
+            justify-content: space-between;
+
+            align-items: center;
+
+            gap: 12px;
+
+            margin-bottom: 12px;
+
+            font-size: 12px;
+
+        }
+
+        .watch-video {
+
+            background: var(--vscode-button-background);
+
+            color: var(--vscode-button-foreground);
+
+            border-radius: 6px;
+
+            padding: 9px 16px;
+
+            font-size: 12px;
+
+            font-weight: 600;
+
+        }
+
+        .watch-video:hover {
+
+            background: var(--vscode-button-hoverBackground);
+
+        }
+
+        .video-container {
+
+            margin-top: 14px;
+
+            background: #090b10;
+
+            border-radius: 8px;
+
+            overflow: hidden;
+
+        }
+
+        .video-container[hidden] {
+
+            display: none;
+
+        }
+
+        .video-container video {
+
+            display: block;
+
+            width: 100%;
+
+            max-height: 480px;
+
+            background: #000;
+
+            object-fit: contain;
+
+        }
+
+        .video-loading {
+
+            padding: 32px;
+
+            text-align: center;
+
+            color: #a1a1aa;
+
+            font-size: 13px;
+
+        }
+
     </style>
+
 </head>
 
 <body>
+
     <h1>Amikoo WDIO Companion</h1>
+
     <p class="subtitle">WebdriverIO integration dashboard</p>
 
     <h2 class="section-title">Project Status</h2>
 
     <div class="grid">
+
         <div class="card">
+
             <div class="label">PROJECT</div>
+
             <div class="value">
+
                 ${escapeHtml(project?.name || 'Not detected')}
+
             </div>
+
         </div>
 
         <div class="card">
+
             <div class="label">WEBDRIVERIO</div>
+
             <div class="value">
+
                 ${escapeHtml(project?.webdriverio || 'Not detected')}
+
             </div>
+
         </div>
 
         <div class="card">
+
             <div class="label">AMIKOO REPORTER</div>
+
             <div class="value">
+
                 ${escapeHtml(project?.reporter || 'Not installed')}
+
             </div>
+
         </div>
 
         <div class="card">
+
             <div class="label">API CONNECTION</div>
+
             <div class="value ${apiKey ? 'connected' : 'disconnected'}">
+
                 ${apiKey ? 'API key configured' : 'Not configured'}
+
             </div>
+
         </div>
+
     </div>
 
     <div class="actions">
+
         <button id="connect" ${apiKey ? 'disabled' : ''}>
+
             Connect to Amikoo
+
         </button>
 
         <button id="disconnect" class="secondary"
+
             ${!apiKey ? 'disabled' : ''}>
+
             Disconnect
+
         </button>
 
         <button id="refresh" class="secondary">
+
             Refresh
+
         </button>
 
         <button id="runTests"
+
             ${isRunning || !project?.webdriverio ? 'disabled' : ''}>
+
             ${isRunning ? 'Running...' : 'Run Tests'}
+
         </button>
 
-        
         <button id="exportReport" class="secondary"
+
             ${!report || isRunning ? 'disabled' : ''}>
+
             Export HTML Report
+
         </button>
 
         <button id="openReport" class="secondary"
+
             ${!report ? 'disabled' : ''}>
+
             Open Report
+
         </button>
 
     </div>
 
     <p class="run-status">
+
         Test execution:
+
         ${escapeHtml(isRunning ? 'Running' : lastRunStatus)}
+
     </p>
 
     <h2 class="section-title">Latest Execution</h2>
 
     ${report
             ? `
+
                 <div class="execution-header">
+
                     <div>
+
                         <div class="execution-id">
+
                             Execution #—
+
                         </div>
+
                         <div class="execution-note">
+
                             Awaiting execution ID from Amikoo API
+
                         </div>
+
                     </div>
 
                     <div class="execution-note">
+
                         ${escapeHtml(report.platform)}
+
                         · ${escapeHtml(report.automation)}
+
                     </div>
+
                 </div>
 
                 <div class="grid">
+
                     <div class="card">
+
                         <div class="label">TOTAL TESTS</div>
+
                         <div class="metric-value">${total}</div>
+
                     </div>
 
                     <div class="card">
+
                         <div class="label">PASSED</div>
+
                         <div class="metric-value passed">${passed}</div>
+
                     </div>
 
                     <div class="card">
+
                         <div class="label">FAILED</div>
+
                         <div class="metric-value failed">${failed}</div>
+
                     </div>
 
                     <div class="card">
+
                         <div class="label">PASS RATE</div>
+
                         <div class="metric-value">${passRate}%</div>
+
                     </div>
+
                 </div>
 
                 <div class="progress">
+
                     <div
+
                         class="progress-pass"
+
                         style="width: ${passRate}%"
+
                     ></div>
+
                     <div
+
                         class="progress-fail"
+
                         style="width: ${failedRate}%"
+
                     ></div>
+
                 </div>
 
                 <p class="execution-note">
+
                     Sum of test durations:
+
                     ${formatDuration(totalDuration)}
+
                     ${latestExecutionAt
                 ? ` · Latest result: ${escapeHtml(latestExecutionAt)}`
                 : ''}
+
                 </p>
 
                 <h2 class="section-title">Test Results</h2>
+
                 ${testRows || '<div class="empty">No tests found.</div>'}
+
             `
             : `
+
                 <div class="empty">
+
                     No execution report found.
+
                     Run the WebdriverIO suite to generate results.
+
                 </div>
+
             `}
 
     <div class="footer">
+
         Amikoo WDIO Companion · PoC v0.2.0
+
     </div>
 
-    <script nonce="${nonce}">
-        const vscode = acquireVsCodeApi();
+        <script nonce="${nonce}">
 
-        for (const command of [
-            'connect',
-            'disconnect',
-            'refresh',
-            'runTests',
-            'exportReport',
-            'openReport'
-        ]) {
-            document
-                .getElementById(command)
-                .addEventListener('click', () => {
-                    vscode.postMessage({ command });
+            const vscode = acquireVsCodeApi();
+
+            for (const command of [
+
+                'connect',
+
+                'disconnect',
+
+                'refresh',
+
+                'runTests',
+
+                'exportReport',
+
+                'openReport'
+
+            ]) {
+
+                document
+
+                    .getElementById(command)
+
+                    .addEventListener('click', () => {
+
+                        vscode.postMessage({ command });
+
+                    });
+
+            }
+
+            document.querySelectorAll('.watch-video').forEach(button => {
+
+                button.addEventListener('click', () => {
+
+                    const testId = button.getAttribute('data-test-id');
+
+                    const container = document.getElementById('video-' + testId);
+
+                    if (!container) return;
+
+                    if (!container.hidden) {
+
+                        const video = container.querySelector('video');
+
+                        if (video) {
+
+                            video.pause();
+
+                            video.removeAttribute('src');
+
+                            video.load();
+
+                        }
+
+                        container.hidden = true;
+
+                        button.textContent = '▶ Watch Recording';
+
+                        return;
+
+                    }
+
+                    container.hidden = false;
+
+                    container.textContent = '';
+
+                    const loading = document.createElement('div');
+
+                    loading.className = 'video-loading';
+
+                    loading.textContent = 'Loading recording...';
+
+                    container.appendChild(loading);
+
+                    button.textContent = 'Close Recording';
+
+                    vscode.postMessage({
+
+                        command: 'playVideo',
+
+                        video: button.getAttribute('data-video'),
+
+                        testId
+
+                    });
+
                 });
-        }
-    </script>
+
+            });
+
+            window.addEventListener('message', event => {
+
+                const message = event.data;
+
+                if (message.command !== 'videoReady' &&
+
+                    message.command !== 'videoError') {
+
+                    return;
+
+                }
+
+                const container = document.getElementById(
+
+                    'video-' + message.testId
+
+                );
+
+                if (!container || container.hidden) return;
+
+                container.textContent = '';
+
+                if (message.command === 'videoError') {
+
+                    const error = document.createElement('div');
+
+                    error.className = 'video-loading';
+
+                    error.textContent = message.error || 'Unable to load video.';
+
+                    container.appendChild(error);
+
+                    return;
+
+                }
+
+                const video = document.createElement('video');
+
+                video.controls = true;
+
+                video.playsInline = true;
+
+                video.preload = 'metadata';
+
+                video.src = message.url;
+
+                video.addEventListener('error', () => {
+
+                    const error = document.createElement('div');
+
+                    error.className = 'video-loading';
+
+                    error.textContent = 'Video playback failed.';
+
+                    container.replaceChildren(error);
+
+                });
+
+                container.appendChild(video);
+
+            });
+
+        </script>
+
 </body>
+
 </html>
+
         `;
     }
     async function runTests() {
@@ -970,6 +1718,45 @@ function activate(context) {
                     case 'openReport':
                         await openHtmlReport();
                         break;
+                    case 'copyVideo':
+                        if (message.video?.startsWith('s3://') &&
+                            /^s3:\/\/[^/]+\/videos\/[^/]+\.mp4$/.test(message.video)) {
+                            await vscode.env.clipboard.writeText(message.video);
+                            vscode.window.showInformationMessage('S3 video reference copied.');
+                        }
+                        break;
+                    case 'playVideo': {
+                        const report = loadReport();
+                        const matchingTest = report?.tests.find(test => test.testRunId === message.testId &&
+                            test.evidence?.video?.s3Uri === message.video);
+                        const matchingVideo = matchingTest?.evidence?.video;
+                        if (!matchingVideo) {
+                            await newPanel.webview.postMessage({
+                                command: 'videoError',
+                                testId: message.testId,
+                                error: 'Video evidence not found.'
+                            });
+                            break;
+                        }
+                        try {
+                            const url = await getVideoUrl(matchingVideo.bucket, matchingVideo.region, matchingVideo.key);
+                            await newPanel.webview.postMessage({
+                                command: 'videoReady',
+                                testId: message.testId,
+                                url
+                            });
+                        }
+                        catch (error) {
+                            await newPanel.webview.postMessage({
+                                command: 'videoError',
+                                testId: message.testId,
+                                error: error instanceof Error
+                                    ? error.message
+                                    : String(error)
+                            });
+                        }
+                        break;
+                    }
                 }
             }, undefined, context.subscriptions);
             newPanel.onDidDispose(() => {
